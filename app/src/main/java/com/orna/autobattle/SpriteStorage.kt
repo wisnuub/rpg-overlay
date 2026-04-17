@@ -13,6 +13,27 @@ import android.util.Log
 import java.io.File
 import java.io.IOException
 
+// SharedPreferences-backed cache of slug names that have been saved to disk.
+// This is the source of truth for "what have we downloaded?" — avoids needing
+// READ_MEDIA_IMAGES permission for the existence check, and is instant.
+private const val PREFS_NAME = "sprite_slugs"
+private const val PREFS_KEY  = "slugs"
+
+private fun cachedSlugs(ctx: Context): Set<String> =
+    ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getStringSet(PREFS_KEY, emptySet()) ?: emptySet()
+
+private fun addToCache(ctx: Context, slug: String) {
+    val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val updated = (prefs.getStringSet(PREFS_KEY, emptySet()) ?: emptySet()).toMutableSet()
+    if (updated.add(slug)) prefs.edit().putStringSet(PREFS_KEY, updated).apply()
+}
+
+private fun clearCache(ctx: Context) {
+    ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .edit().remove(PREFS_KEY).apply()
+}
+
 /**
  * Stores monster sprites in Downloads/OrnaAutoSprites/ so they survive app uninstalls.
  * Uses MediaStore on API 29+ (no permission needed for writing).
@@ -28,11 +49,13 @@ object SpriteStorage {
     // ── Write ─────────────────────────────────────────────────────────────────
 
     fun save(ctx: Context, name: String, bitmap: Bitmap): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             saveMediaStore(ctx, name, bitmap)
         } else {
             saveFile(ctx, name, bitmap)
         }
+        if (ok) addToCache(ctx, name)
+        return ok
     }
 
     private fun saveMediaStore(ctx: Context, name: String, bitmap: Bitmap): Boolean {
@@ -136,7 +159,8 @@ object SpriteStorage {
         null
     }
 
-    fun slugSet(ctx: Context): Set<String> = list(ctx).map { it.first }.toSet()
+    /** Fast SharedPreferences-backed check — no MediaStore query, no permissions needed. */
+    fun slugSet(ctx: Context): Set<String> = cachedSlugs(ctx)
 
     // ── Delete ────────────────────────────────────────────────────────────────
 
@@ -149,6 +173,10 @@ object SpriteStorage {
                 arrayOf("$RELATIVE_PATH%", "$name.png")
             )
         }
+        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val updated = (prefs.getStringSet(PREFS_KEY, emptySet()) ?: emptySet())
+            .toMutableSet().also { it.remove(name) }
+        prefs.edit().putStringSet(PREFS_KEY, updated).apply()
     }
 
     fun deleteAll(ctx: Context) {
@@ -165,5 +193,6 @@ object SpriteStorage {
                 FOLDER
             ).deleteRecursively()
         }
+        clearCache(ctx)
     }
 }
