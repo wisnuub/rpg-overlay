@@ -27,14 +27,14 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+      - name: Build release APK (signed with debug keystore — sideload-safe)
+        run: ./gradlew assembleRelease --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: orna-autobattle-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: orna-autobattle-release
+          path: app/build/outputs/apk/release/app-release.apk
           retention-days: 30
 
       # Attach APK to GitHub Release when a version tag is pushed
@@ -42,5 +42,5 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: app/build/outputs/apk/release/app-release.apk
           name: ${{ github.ref_name }}

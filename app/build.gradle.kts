@@ -18,6 +18,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Sign release with the auto-generated debug keystore so it can be sideloaded
+            // without needing a production keystore for personal use.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
