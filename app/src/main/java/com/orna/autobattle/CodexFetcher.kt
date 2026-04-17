@@ -7,18 +7,9 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-/**
- * Downloads monster sprites from the Orna codex and stores them alongside
- * TemplateManager templates.
- *
- * [fetchAll]      — download everything missing (parallel, fast).
- * [checkForNew]   — fetch the slug list only, return slugs not yet on disk.
- * [downloadNew]   — download only the slugs returned by checkForNew.
- */
 object CodexFetcher {
 
     private const val TAG = "CodexFetcher"
@@ -26,38 +17,26 @@ object CodexFetcher {
     private const val LIST_URL = "$BASE/codex/monsters/"
     private const val SPRITES_URL = "$BASE/static/img/monsters/"
     private const val TARGET_PX = 56
-    private const val CONCURRENT = 5      // parallel download slots
+    private const val CONCURRENT = 5
     private const val PAGE_DELAY_MS = 200L
 
     data class Progress(val done: Int, val total: Int, val current: String)
-
-    // ── Full download (all missing sprites) ───────────────────────────────────
 
     suspend fun fetchAll(
         ctx: Context,
         onProgress: (Progress) -> Unit,
         onDone: (downloaded: Int, total: Int) -> Unit
     ) = withContext(Dispatchers.IO) {
-        val outDir = outDir(ctx)
         withContext(Dispatchers.Main) { onProgress(Progress(0, 0, "Fetching monster list…")) }
-
-        val monsters = fetchAllSlugs()
-        val unique = monsters.distinctBy { it.first }
-        Log.d(TAG, "Total unique monsters: ${unique.size}")
-
-        downloadList(unique, outDir, onProgress, onDone)
+        val monsters = fetchAllSlugs().distinctBy { it.first }
+        Log.d(TAG, "Total unique monsters: ${monsters.size}")
+        downloadList(ctx, monsters, onProgress, onDone)
     }
-
-    // ── Check for new monsters not yet on disk ────────────────────────────────
 
     suspend fun checkForNew(ctx: Context): List<Pair<String, String>> =
         withContext(Dispatchers.IO) {
-            val existing = outDir(ctx).listFiles()
-                ?.map { it.nameWithoutExtension }
-                ?.toSet() ?: emptySet()
-            fetchAllSlugs()
-                .distinctBy { it.first }
-                .filter { (slug, _) -> !existing.contains(slug) }
+            val existing = SpriteStorage.slugSet(ctx)
+            fetchAllSlugs().distinctBy { it.first }.filter { (slug, _) -> slug !in existing }
         }
 
     suspend fun downloadNew(
@@ -70,34 +49,32 @@ object CodexFetcher {
             withContext(Dispatchers.Main) { onDone(0, 0) }
             return@withContext
         }
-        downloadList(newMonsters, outDir(ctx), onProgress, onDone)
+        downloadList(ctx, newMonsters, onProgress, onDone)
     }
 
-    // ── Shared download engine (parallel with semaphore) ─────────────────────
-
     private suspend fun downloadList(
+        ctx: Context,
         monsters: List<Pair<String, String>>,
-        outDir: File,
         onProgress: (Progress) -> Unit,
         onDone: (downloaded: Int, total: Int) -> Unit
     ) = coroutineScope {
+        val existing = SpriteStorage.slugSet(ctx)
         val semaphore = Semaphore(CONCURRENT)
         var done = 0
 
-        val jobs = monsters.mapIndexed { idx, (slug, name) ->
+        val jobs = monsters.map { (slug, name) ->
             async {
                 semaphore.withPermit {
-                    val dest = File(outDir, "$slug.png")
-                    val saved = if (dest.exists()) {
-                        true // already have it
+                    val saved = if (slug in existing) {
+                        true
                     } else {
                         val bmp = downloadSprite(slug)
                         if (bmp != null) {
                             val scaled = scaleBitmap(bmp, TARGET_PX)
                             bmp.recycle()
-                            dest.outputStream().use { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                            val ok = SpriteStorage.save(ctx, slug, scaled)
                             scaled.recycle()
-                            true
+                            ok
                         } else false
                     }
                     val current = synchronized(this@CodexFetcher) { ++done }
@@ -113,8 +90,6 @@ object CodexFetcher {
         val downloaded = results.count { it }
         withContext(Dispatchers.Main) { onDone(downloaded, monsters.size) }
     }
-
-    // ── Slug scraping ─────────────────────────────────────────────────────────
 
     private suspend fun fetchAllSlugs(): List<Pair<String, String>> =
         withContext(Dispatchers.IO) {
@@ -147,8 +122,6 @@ object CodexFetcher {
         return results
     }
 
-    // ── Sprite download ───────────────────────────────────────────────────────
-
     private fun downloadSprite(slug: String): Bitmap? {
         val underscored = slug.replace("-", "_")
         for (suffix in listOf("1", "")) {
@@ -176,21 +149,16 @@ object CodexFetcher {
         return Bitmap.createScaledBitmap(src, w, targetHeight, true)
     }
 
-    private fun fetchText(urlStr: String): String? {
-        return try {
-            val conn = URL(urlStr).openConnection() as HttpURLConnection
-            conn.connectTimeout = 10000
-            conn.readTimeout = 10000
-            conn.setRequestProperty("User-Agent", "OrnaAuto/1.0")
-            val text = conn.inputStream.bufferedReader().readText()
-            conn.disconnect()
-            text
-        } catch (e: Exception) {
-            Log.e(TAG, "fetchText failed: $urlStr — ${e.message}")
-            null
-        }
+    private fun fetchText(urlStr: String): String? = try {
+        val conn = URL(urlStr).openConnection() as HttpURLConnection
+        conn.connectTimeout = 10000
+        conn.readTimeout = 10000
+        conn.setRequestProperty("User-Agent", "OrnaAuto/1.0")
+        val text = conn.inputStream.bufferedReader().readText()
+        conn.disconnect()
+        text
+    } catch (e: Exception) {
+        Log.e(TAG, "fetchText failed: $urlStr — ${e.message}")
+        null
     }
-
-    private fun outDir(ctx: Context) =
-        File(ctx.filesDir, "monster_templates").also { it.mkdirs() }
 }

@@ -61,8 +61,8 @@ class MainActivity : AppCompatActivity() {
                 OverlayControlService.start(this, captureResultCode, data)
                 // Launch Orna RPG so the overlay is immediately over the game.
                 // FLAG_ACTIVITY_REORDER_TO_FRONT brings it forward if already running.
-                val ornaIntent = packageManager.getLaunchIntentForPackage("orna.rpg.mobile")
-                    ?: packageManager.getLaunchIntentForPackage("orna.rpg.mobile.googleplay")
+                val ornaIntent = packageManager.getLaunchIntentForPackage("playorna.com.orna")
+                    ?: packageManager.getLaunchIntentForPackage("orna.rpg.mobile")
                 if (ornaIntent != null) {
                     ornaIntent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
                     startActivity(ornaIntent)
@@ -118,9 +118,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Notification permission (Android 13+)
+        // Runtime permissions (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 200)
+            requestPermissions(arrayOf(
+                android.Manifest.permission.POST_NOTIFICATIONS,
+                android.Manifest.permission.READ_MEDIA_IMAGES
+            ), 200)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 201)
         }
     }
 

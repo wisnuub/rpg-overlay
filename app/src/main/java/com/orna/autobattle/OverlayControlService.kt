@@ -99,12 +99,7 @@ class OverlayControlService : Service() {
 
         TemplateManager.init(this)
 
-        try {
-            setupOverlay()
-        } catch (e: Exception) {
-            Log.e(TAG, "setupOverlay failed: ${e.message}")
-            stopSelf()
-        }
+        setupOverlay()
 
         return START_NOT_STICKY
     }
