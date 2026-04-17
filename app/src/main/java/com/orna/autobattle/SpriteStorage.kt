@@ -159,8 +159,30 @@ object SpriteStorage {
         null
     }
 
-    /** Fast SharedPreferences-backed check — no MediaStore query, no permissions needed. */
-    fun slugSet(ctx: Context): Set<String> = cachedSlugs(ctx)
+    /**
+     * Returns the set of downloaded slug names.
+     * If the cache is empty (fresh install / reinstall), scans Downloads/OrnaAutoSprites/
+     * via MediaStore to rebuild it from whatever is already on disk.
+     * Requires READ_MEDIA_IMAGES (API 33+) or READ_EXTERNAL_STORAGE (API <33) to find
+     * files from a previous install; if permission is absent the scan returns nothing and
+     * the caller will re-download everything (safe fallback).
+     */
+    fun slugSet(ctx: Context): Set<String> {
+        val cached = cachedSlugs(ctx)
+        if (cached.isNotEmpty()) return cached
+        return rebuildCacheFromDisk(ctx)
+    }
+
+    /** Scans the on-disk folder and repopulates SharedPreferences. Returns the new set. */
+    fun rebuildCacheFromDisk(ctx: Context): Set<String> {
+        val found = list(ctx).map { it.first }.toSet()
+        if (found.isNotEmpty()) {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putStringSet(PREFS_KEY, found).apply()
+            Log.d(TAG, "Rebuilt slug cache from disk: ${found.size} sprites")
+        }
+        return found
+    }
 
     // ── Delete ────────────────────────────────────────────────────────────────
 

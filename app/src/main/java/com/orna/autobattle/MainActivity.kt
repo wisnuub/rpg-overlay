@@ -127,6 +127,12 @@ class MainActivity : AppCompatActivity() {
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 201)
         }
+
+        // Warm up the slug cache from disk in the background so Check for New is fast.
+        // This handles reinstall: scans Downloads/OrnaAutoSprites/ and rebuilds the cache.
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            SpriteStorage.rebuildCacheFromDisk(this@MainActivity)
+        }
     }
 
     override fun onResume() {
