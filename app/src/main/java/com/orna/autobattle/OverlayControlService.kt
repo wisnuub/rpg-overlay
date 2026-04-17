@@ -159,7 +159,7 @@ class OverlayControlService : Service() {
         ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                engine.setStrategy(BattleStrategy.fromIndex(pos))
+                engine.strategy = BattleStrategy.fromIndex(pos)
             }
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) = Unit
         }

@@ -98,8 +98,6 @@ class AutoBattleEngine {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    fun setStrategy(s: BattleStrategy) { strategy = s }
-
     fun reset() {
         state = State.HUNTING
         battlesWon = 0; battlesLost = 0; activeBuffCount = 0
