@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OrnaAuto</string>
+    <string name="accessibility_description">Auto-battle overlay for OrnaRPG: detects monsters and battles automatically.</string>
+    <string name="btn_start">Start</string>
+    <string name="btn_stop">Stop</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_hunting">Hunting</string>
+    <string name="status_battle">In Battle</string>
+</resources>

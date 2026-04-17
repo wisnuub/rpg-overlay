@@ -1,0 +1,32 @@
+# Built output
+*.apk
+*.aab
+*.ap_
+*.dex
+build/
+*/build/
+
+# Gradle
+.gradle/
+local.properties
+gradle.properties.local
+
+# Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystore (never commit signing keys)
+*.jks
+*.keystore
+release/
+
+# Python scripts venv / cache
+scripts/__pycache__/
+scripts/*.pyc
+scripts/venv/
