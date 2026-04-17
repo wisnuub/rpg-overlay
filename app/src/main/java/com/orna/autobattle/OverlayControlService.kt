@@ -30,12 +30,22 @@ class OverlayControlService : Service() {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
 
-        fun start(ctx: Context, resultCode: Int, data: Intent) {
-            val i = Intent(ctx, OverlayControlService::class.java).apply {
-                putExtra(EXTRA_RESULT_CODE, resultCode)
-                putExtra(EXTRA_RESULT_DATA, data)
+        // Set by AutoBattleAccessibilityService when window focus changes
+        private var instance: OverlayControlService? = null
+
+        fun setOrnaForeground(isOrna: Boolean) {
+            instance?.let { svc ->
+                Handler(Looper.getMainLooper()).post { svc.applyOrnaVisibility(isOrna) }
             }
-            ctx.startForegroundService(i)
+        }
+
+        fun start(ctx: Context, resultCode: Int, data: Intent) {
+            ctx.startForegroundService(
+                Intent(ctx, OverlayControlService::class.java).apply {
+                    putExtra(EXTRA_RESULT_CODE, resultCode)
+                    putExtra(EXTRA_RESULT_DATA, data)
+                }
+            )
         }
 
         fun stop(ctx: Context) {
@@ -44,7 +54,6 @@ class OverlayControlService : Service() {
     }
 
     private val engine = AutoBattleEngine()
-
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var captureJob: Job? = null
     private var running = false
@@ -60,7 +69,6 @@ class OverlayControlService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
 
-    // UI refs
     private lateinit var tvStatusDot: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvStats: TextView
@@ -83,23 +91,45 @@ class OverlayControlService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification("Overlay ready"))
+        instance = this
 
         val metrics = resources.displayMetrics
         screenWidth = metrics.widthPixels
         screenHeight = metrics.heightPixels
         screenDensity = metrics.densityDpi
 
+        // Fix: use typed getParcelableExtra on API 33+
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
             ?: Activity.RESULT_CANCELED
-        val resultData = intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
-
-        if (resultData != null && resultCode == Activity.RESULT_OK) {
-            setupMediaProjection(resultCode, resultData)
+        val resultData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent?.getParcelableExtra(EXTRA_RESULT_DATA)
         }
 
-        TemplateManager.init(this)
+        if (resultData != null && resultCode == Activity.RESULT_OK) {
+            try {
+                setupMediaProjection(resultCode, resultData)
+            } catch (e: Exception) {
+                Log.e(TAG, "MediaProjection setup failed: ${e.message}")
+            }
+        }
 
-        setupOverlay()
+        // Load templates off the main thread to avoid ANR
+        serviceScope.launch(Dispatchers.IO) {
+            TemplateManager.init(this@OverlayControlService)
+            withContext(Dispatchers.Main) {
+                if (::tvTemplateCount.isInitialized) refreshTemplateCount()
+            }
+        }
+
+        try {
+            setupOverlay()
+        } catch (e: Exception) {
+            Log.e(TAG, "setupOverlay failed: ${e.message}", e)
+            updateNotification("Overlay error — see logcat")
+        }
 
         return START_NOT_STICKY
     }
@@ -180,7 +210,6 @@ class OverlayControlService : Service() {
 
         refreshTemplateCount()
 
-        // Drag via left area of bar
         var initX = 0; var initY = 0; var initTouchX = 0f; var initTouchY = 0f
         overlayView.findViewById<View>(R.id.dragArea).setOnTouchListener { _, ev ->
             when (ev.action) {
@@ -198,6 +227,12 @@ class OverlayControlService : Service() {
         }
 
         windowManager.addView(overlayView, overlayParams)
+    }
+
+    fun applyOrnaVisibility(visible: Boolean) {
+        if (::overlayView.isInitialized) {
+            overlayView.visibility = if (visible) View.VISIBLE else View.GONE
+        }
     }
 
     private fun rebuildBoosterSettings() {
@@ -230,10 +265,8 @@ class OverlayControlService : Service() {
 
         captureJob = serviceScope.launch {
             while (running) {
-                try {
-                    captureAndProcess()
-                } catch (e: Exception) {
-                    Log.e(TAG, "captureAndProcess error: ${e.message}")
+                try { captureAndProcess() } catch (e: Exception) {
+                    Log.e(TAG, "captureAndProcess: ${e.message}")
                 }
                 delay(CAPTURE_INTERVAL_MS)
             }
@@ -242,8 +275,7 @@ class OverlayControlService : Service() {
 
     private fun stopBattle() {
         running = false
-        captureJob?.cancel()
-        captureJob = null
+        captureJob?.cancel(); captureJob = null
         btnToggle.text = "▶"
         tvStatus.text = "Stopped"
         tvStatusDot.setTextColor(Color.parseColor("#888888"))
@@ -329,6 +361,7 @@ class OverlayControlService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         stopBattle()
         serviceScope.cancel()
         if (::overlayView.isInitialized) {
@@ -344,8 +377,7 @@ class OverlayControlService : Service() {
     private fun buildNotification(text: String = "Overlay active"): Notification {
         val chan = NotificationChannel(CHANNEL_ID, "Auto Battle", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(chan)
-        // Tap notification to bring app back
-        val pendingIntent = PendingIntent.getActivity(
+        val pi = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE
@@ -354,12 +386,11 @@ class OverlayControlService : Service() {
             .setContentTitle("Orna Auto Battle")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(pi)
             .build()
     }
 
     private fun updateNotification(text: String) {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIF_ID, buildNotification(text))
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text))
     }
 }

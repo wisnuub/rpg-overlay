@@ -10,19 +10,15 @@ import android.graphics.Path
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.content.ContextCompat
 
-/**
- * Performs screen taps on behalf of the auto-battle logic.
- * Receives commands from OverlayControlService via LocalBroadcast.
- */
 class AutoBattleAccessibilityService : AccessibilityService() {
 
     companion object {
-        const val ACTION_TAP = "com.orna.autobattle.TAP"
-        const val EXTRA_X = "x"
-        const val EXTRA_Y = "y"
+        const val ACTION_TAP   = "com.orna.autobattle.TAP"
         const val ACTION_SWIPE = "com.orna.autobattle.SWIPE"
-        const val EXTRA_X2 = "x2"
-        const val EXTRA_Y2 = "y2"
+        const val EXTRA_X  = "x";  const val EXTRA_Y  = "y"
+        const val EXTRA_X2 = "x2"; const val EXTRA_Y2 = "y2"
+
+        private const val ORNA_PACKAGE = "playorna.com.orna"
 
         var instance: AutoBattleAccessibilityService? = null
             private set
@@ -33,18 +29,16 @@ class AutoBattleAccessibilityService : AccessibilityService() {
     private val tapReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                ACTION_TAP -> {
-                    val x = intent.getFloatExtra(EXTRA_X, 0f)
-                    val y = intent.getFloatExtra(EXTRA_Y, 0f)
-                    performTap(x, y)
-                }
-                ACTION_SWIPE -> {
-                    val x1 = intent.getFloatExtra(EXTRA_X, 0f)
-                    val y1 = intent.getFloatExtra(EXTRA_Y, 0f)
-                    val x2 = intent.getFloatExtra(EXTRA_X2, 0f)
-                    val y2 = intent.getFloatExtra(EXTRA_Y2, 0f)
-                    performSwipe(x1, y1, x2, y2)
-                }
+                ACTION_TAP -> performTap(
+                    intent.getFloatExtra(EXTRA_X, 0f),
+                    intent.getFloatExtra(EXTRA_Y, 0f)
+                )
+                ACTION_SWIPE -> performSwipe(
+                    intent.getFloatExtra(EXTRA_X, 0f),
+                    intent.getFloatExtra(EXTRA_Y, 0f),
+                    intent.getFloatExtra(EXTRA_X2, 0f),
+                    intent.getFloatExtra(EXTRA_Y2, 0f)
+                )
             }
         }
     }
@@ -59,7 +53,13 @@ class AutoBattleAccessibilityService : AccessibilityService() {
         ContextCompat.registerReceiver(this, tapReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val pkg = event.packageName?.toString() ?: return
+            OverlayControlService.setOrnaForeground(pkg == ORNA_PACKAGE)
+        }
+    }
+
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
