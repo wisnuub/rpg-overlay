@@ -59,6 +59,11 @@ class MainActivity : AppCompatActivity() {
         btnLaunch.setOnClickListener {
             captureData?.let { data ->
                 OverlayControlService.start(this, captureResultCode, data)
+                // Launch Orna RPG so the overlay is immediately over the game
+                val ornaIntent = packageManager.getLaunchIntentForPackage("orna.rpg.mobile")
+                if (ornaIntent != null) {
+                    startActivity(ornaIntent)
+                }
                 finish()
             }
         }

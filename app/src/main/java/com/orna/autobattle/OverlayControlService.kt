@@ -16,11 +16,12 @@ import android.view.*
 import android.view.WindowManager.LayoutParams.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.*
 
 private const val TAG = "OverlayService"
 private const val NOTIF_ID = 1
 private const val CHANNEL_ID = "orna_auto"
-private const val CAPTURE_INTERVAL_MS = 800L   // generous interval to avoid action spam on laggy networks
+private const val CAPTURE_INTERVAL_MS = 800L
 
 class OverlayControlService : Service() {
 
@@ -42,7 +43,10 @@ class OverlayControlService : Service() {
     }
 
     private val engine = AutoBattleEngine()
-    private val handler = Handler(Looper.getMainLooper())
+
+    // Coroutine scope — SupervisorJob so one failed capture doesn't kill the loop
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var captureJob: Job? = null
     private var running = false
 
     private lateinit var windowManager: WindowManager
@@ -56,14 +60,12 @@ class OverlayControlService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
 
-    // Core UI refs
+    // UI refs
     private lateinit var tvStatus: TextView
     private lateinit var tvStats: TextView
     private lateinit var tvTemplateCount: TextView
     private lateinit var btnToggle: Button
     private lateinit var btnCapture: Button
-
-    // Settings UI refs
     private lateinit var cbAutoBuy: CheckBox
     private lateinit var cbBoosterExp: CheckBox
     private lateinit var cbBoosterAffinity: CheckBox
@@ -74,16 +76,7 @@ class OverlayControlService : Service() {
     private lateinit var cbBoosterDowse: CheckBox
     private lateinit var cbBoosterTorch: CheckBox
 
-    // When true the next capture cycle saves a template instead of acting
     private var captureNextFrame = false
-
-    private val captureRunnable = object : Runnable {
-        override fun run() {
-            if (!running) return
-            captureAndProcess()
-            handler.postDelayed(this, CAPTURE_INTERVAL_MS)
-        }
-    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification())
@@ -121,8 +114,7 @@ class OverlayControlService : Service() {
 
     private fun setupOverlay() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val inflater = LayoutInflater.from(this)
-        overlayView = inflater.inflate(R.layout.overlay_controls, null)
+        overlayView = LayoutInflater.from(this).inflate(R.layout.overlay_controls, null)
 
         overlayParams = WindowManager.LayoutParams(
             WRAP_CONTENT, WRAP_CONTENT,
@@ -134,28 +126,24 @@ class OverlayControlService : Service() {
             x = 16; y = 200
         }
 
-        // Find views
-        tvStatus = overlayView.findViewById(R.id.tvOverlayStatus)
-        tvStats = overlayView.findViewById(R.id.tvStats)
-        tvTemplateCount = overlayView.findViewById(R.id.tvTemplateCount)
-        btnToggle = overlayView.findViewById(R.id.btnToggle)
-        btnCapture = overlayView.findViewById(R.id.btnCapture)
-        cbAutoBuy = overlayView.findViewById(R.id.cbAutoBuy)
-        cbBoosterExp = overlayView.findViewById(R.id.cbBoosterExp)
-        cbBoosterAffinity = overlayView.findViewById(R.id.cbBoosterAffinity)
-        cbBoosterLuckyCoin = overlayView.findViewById(R.id.cbBoosterLuckyCoin)
-        cbBoosterLuckySilver = overlayView.findViewById(R.id.cbBoosterLuckySilver)
-        cbBoosterOccult = overlayView.findViewById(R.id.cbBoosterOccult)
-        cbBoosterHallowed = overlayView.findViewById(R.id.cbBoosterHallowed)
-        cbBoosterDowse = overlayView.findViewById(R.id.cbBoosterDowse)
-        cbBoosterTorch = overlayView.findViewById(R.id.cbBoosterTorch)
+        tvStatus       = overlayView.findViewById(R.id.tvOverlayStatus)
+        tvStats        = overlayView.findViewById(R.id.tvStats)
+        tvTemplateCount= overlayView.findViewById(R.id.tvTemplateCount)
+        btnToggle      = overlayView.findViewById(R.id.btnToggle)
+        btnCapture     = overlayView.findViewById(R.id.btnCapture)
+        cbAutoBuy           = overlayView.findViewById(R.id.cbAutoBuy)
+        cbBoosterExp        = overlayView.findViewById(R.id.cbBoosterExp)
+        cbBoosterAffinity   = overlayView.findViewById(R.id.cbBoosterAffinity)
+        cbBoosterLuckyCoin  = overlayView.findViewById(R.id.cbBoosterLuckyCoin)
+        cbBoosterLuckySilver= overlayView.findViewById(R.id.cbBoosterLuckySilver)
+        cbBoosterOccult     = overlayView.findViewById(R.id.cbBoosterOccult)
+        cbBoosterHallowed   = overlayView.findViewById(R.id.cbBoosterHallowed)
+        cbBoosterDowse      = overlayView.findViewById(R.id.cbBoosterDowse)
+        cbBoosterTorch      = overlayView.findViewById(R.id.cbBoosterTorch)
 
-        // Strategy spinner
         val spinner = overlayView.findViewById<Spinner>(R.id.spinnerStrategy)
         spinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            BattleStrategy.labels()
+            this, android.R.layout.simple_spinner_item, BattleStrategy.labels()
         ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -164,49 +152,31 @@ class OverlayControlService : Service() {
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) = Unit
         }
 
-        // Auto-buy toggle
-        cbAutoBuy.setOnCheckedChangeListener { _, checked ->
-            engine.autoBuy = checked
-            Log.d(TAG, "Auto-buy: $checked")
-        }
+        cbAutoBuy.setOnCheckedChangeListener { _, checked -> engine.autoBuy = checked }
 
-        // Booster checkboxes — rebuild BoosterSettings on any change
         val boosterListener = CompoundButton.OnCheckedChangeListener { _, _ -> rebuildBoosterSettings() }
-        listOf(
-            cbBoosterExp, cbBoosterAffinity, cbBoosterLuckyCoin, cbBoosterLuckySilver,
-            cbBoosterOccult, cbBoosterHallowed, cbBoosterDowse, cbBoosterTorch
-        ).forEach { it.setOnCheckedChangeListener(boosterListener) }
-
-        // Apply initial booster state (matches xml defaults = DEFAULT_ENABLED)
+        listOf(cbBoosterExp, cbBoosterAffinity, cbBoosterLuckyCoin, cbBoosterLuckySilver,
+               cbBoosterOccult, cbBoosterHallowed, cbBoosterDowse, cbBoosterTorch)
+            .forEach { it.setOnCheckedChangeListener(boosterListener) }
         rebuildBoosterSettings()
 
-        // Start / Stop
-        btnToggle.setOnClickListener {
-            if (running) stopBattle() else startBattle()
-        }
-
-        // Capture sprite
-        btnCapture.setOnClickListener {
-            captureNextFrame = true
-            tvStatus.text = "Capturing…"
-        }
+        btnToggle.setOnClickListener { if (running) stopBattle() else startBattle() }
+        btnCapture.setOnClickListener { captureNextFrame = true; tvStatus.text = "Capturing…" }
 
         refreshTemplateCount()
 
-        // Drag to move overlay — only the drag handle responds to touch
+        // Drag handle
         var initX = 0; var initY = 0; var initTouchX = 0f; var initTouchY = 0f
         overlayView.findViewById<TextView>(R.id.tvDragHandle).setOnTouchListener { _, ev ->
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initX = overlayParams.x; initY = overlayParams.y
-                    initTouchX = ev.rawX; initTouchY = ev.rawY
-                    true
+                    initTouchX = ev.rawX; initTouchY = ev.rawY; true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     overlayParams.x = initX + (ev.rawX - initTouchX).toInt()
                     overlayParams.y = initY + (ev.rawY - initTouchY).toInt()
-                    windowManager.updateViewLayout(overlayView, overlayParams)
-                    true
+                    windowManager.updateViewLayout(overlayView, overlayParams); true
                 }
                 else -> false
             }
@@ -226,8 +196,9 @@ class OverlayControlService : Service() {
         if (cbBoosterDowse.isChecked)       enabled.add(BoosterItem.DOWSING_ROD)
         if (cbBoosterTorch.isChecked)       enabled.add(BoosterItem.TORCH)
         engine.boosterSettings = BoosterSettings(enabled, engine.boosterSettings.reapplyEvery)
-        Log.d(TAG, "Boosters updated: ${enabled.map { it.label }}")
     }
+
+    // ── Battle loop ───────────────────────────────────────────────────────────
 
     private fun startBattle() {
         if (!AutoBattleAccessibilityService.isRunning()) {
@@ -236,37 +207,56 @@ class OverlayControlService : Service() {
         }
         running = true
         btnToggle.text = "Stop"
-        tvStatus.text = "Hunting…"
+        tvStatus.text = "Starting…"
         engine.requestBoosterApply()
-        handler.post(captureRunnable)
+
+        captureJob = serviceScope.launch {
+            while (running) {
+                try {
+                    captureAndProcess()
+                } catch (e: Exception) {
+                    Log.e(TAG, "captureAndProcess error: ${e.message}")
+                }
+                delay(CAPTURE_INTERVAL_MS)
+            }
+        }
     }
 
     private fun stopBattle() {
         running = false
-        handler.removeCallbacks(captureRunnable)
+        captureJob?.cancel()
+        captureJob = null
         btnToggle.text = "Start"
         tvStatus.text = "Stopped"
     }
 
-    private fun captureAndProcess() {
-        val bmp = latestBitmap() ?: return
+    // ── Capture + analysis (heavy work off main thread) ───────────────────────
 
-        // Capture mode: save a new monster template
+    private suspend fun captureAndProcess() {
+        val bmp = withContext(Dispatchers.IO) { latestBitmap() } ?: return
+
         if (captureNextFrame) {
             captureNextFrame = false
-            val monsters = ScreenAnalyzer.findMonsters(bmp, maxTargets = 1)
-            val cropX = monsters.firstOrNull()?.x ?: (screenWidth / 2)
-            val cropY = monsters.firstOrNull()?.y ?: (screenHeight / 2)
-            val saved = TemplateManager.captureFromFrame(this, bmp, cropX, cropY, size = 28)
+            val saved = withContext(Dispatchers.Default) {
+                val monsters = ScreenAnalyzer.findMonsters(bmp, maxTargets = 1)
+                val cropX = monsters.firstOrNull()?.x ?: (screenWidth / 2)
+                val cropY = monsters.firstOrNull()?.y ?: (screenHeight / 2)
+                TemplateManager.captureFromFrame(this@OverlayControlService, bmp, cropX, cropY, size = 28)
+            }
             bmp.recycle()
+            // Back on Main (coroutine started on Main)
             tvStatus.text = if (saved != null) "Saved: ${saved.name}" else "Capture failed"
             refreshTemplateCount()
             return
         }
 
-        val action = engine.tick(bmp, screenWidth, screenHeight)
+        // engine.tick() does all pixel analysis — run on CPU thread
+        val action = withContext(Dispatchers.Default) {
+            engine.tick(bmp, screenWidth, screenHeight)
+        }
         bmp.recycle()
 
+        // UI updates — back on Main
         tvStatus.text = when (engine.state) {
             AutoBattleEngine.State.HUNTING           -> "Hunting"
             AutoBattleEngine.State.HEALING           -> "Healing"
@@ -309,9 +299,7 @@ class OverlayControlService : Service() {
         return try {
             val plane = image.planes[0]
             val bmp = Bitmap.createBitmap(
-                plane.rowStride / plane.pixelStride,
-                screenHeight,
-                Bitmap.Config.ARGB_8888
+                plane.rowStride / plane.pixelStride, screenHeight, Bitmap.Config.ARGB_8888
             )
             bmp.copyPixelsFromBuffer(plane.buffer)
             if (bmp.width != screenWidth)
@@ -325,6 +313,7 @@ class OverlayControlService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopBattle()
+        serviceScope.cancel()
         if (::overlayView.isInitialized) windowManager.removeView(overlayView)
         virtualDisplay?.release()
         mediaProjection?.stop()

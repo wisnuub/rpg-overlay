@@ -69,19 +69,22 @@ class AutoBattleAccessibilityService : AccessibilityService() {
     }
 
     fun performTap(x: Float, y: Float, durationMs: Long = 80) {
-        val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
-        val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        dispatchGesture(gesture, null, null)
+        try {
+            val path = Path().apply { moveTo(x, y) }
+            val stroke = GestureDescription.StrokeDescription(path, 0, durationMs.coerceAtLeast(1))
+            dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        } catch (e: Exception) {
+            android.util.Log.w("AccessibilitySvc", "performTap failed: ${e.message}")
+        }
     }
 
-    fun performSwipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long = 200) {
-        val path = Path().apply {
-            moveTo(x1, y1)
-            lineTo(x2, y2)
+    fun performSwipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long = 300) {
+        try {
+            val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
+            val stroke = GestureDescription.StrokeDescription(path, 0, durationMs.coerceAtLeast(1))
+            dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        } catch (e: Exception) {
+            android.util.Log.w("AccessibilitySvc", "performSwipe failed: ${e.message}")
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
-        val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        dispatchGesture(gesture, null, null)
     }
 }
