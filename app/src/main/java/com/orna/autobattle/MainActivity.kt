@@ -21,6 +21,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnCapture: Button
     private lateinit var btnLaunch: Button
     private lateinit var btnDownload: Button
+    private lateinit var btnCheckNew: Button
     private lateinit var tvDownloadProgress: TextView
 
     private var captureResultCode = Activity.RESULT_CANCELED
@@ -38,6 +39,7 @@ class MainActivity : AppCompatActivity() {
         btnCapture = findViewById(R.id.btnScreenCapture)
         btnLaunch = findViewById(R.id.btnLaunchOverlay)
         btnDownload = findViewById(R.id.btnDownloadSprites)
+        btnCheckNew = findViewById(R.id.btnCheckNew)
         tvDownloadProgress = findViewById(R.id.tvDownloadProgress)
 
         btnOverlay.setOnClickListener {
@@ -62,7 +64,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnDownload.setOnClickListener {
-            btnDownload.isEnabled = false
+            setDownloadBtnsEnabled(false)
             lifecycleScope.launch {
                 CodexFetcher.fetchAll(
                     ctx = this@MainActivity,
@@ -73,10 +75,36 @@ class MainActivity : AppCompatActivity() {
                     },
                     onDone = { downloaded, total ->
                         tvDownloadProgress.text = "Done: $downloaded/$total sprites saved"
-                        btnDownload.isEnabled = true
+                        setDownloadBtnsEnabled(true)
                         TemplateManager.init(this@MainActivity)
                     }
                 )
+            }
+        }
+
+        btnCheckNew.setOnClickListener {
+            setDownloadBtnsEnabled(false)
+            tvDownloadProgress.text = "Checking for new monsters…"
+            lifecycleScope.launch {
+                val newMonsters = CodexFetcher.checkForNew(this@MainActivity)
+                if (newMonsters.isEmpty()) {
+                    tvDownloadProgress.text = "No new monsters found"
+                    setDownloadBtnsEnabled(true)
+                } else {
+                    tvDownloadProgress.text = "${newMonsters.size} new — downloading…"
+                    CodexFetcher.downloadNew(
+                        ctx = this@MainActivity,
+                        newMonsters = newMonsters,
+                        onProgress = { p ->
+                            tvDownloadProgress.text = "${p.done}/${p.total} — ${p.current}"
+                        },
+                        onDone = { downloaded, total ->
+                            tvDownloadProgress.text = "Done: +$downloaded new sprites"
+                            setDownloadBtnsEnabled(true)
+                            TemplateManager.init(this@MainActivity)
+                        }
+                    )
+                }
             }
         }
 
@@ -99,6 +127,11 @@ class MainActivity : AppCompatActivity() {
             captureData = data
             refreshUI()
         }
+    }
+
+    private fun setDownloadBtnsEnabled(enabled: Boolean) {
+        btnDownload.isEnabled = enabled
+        btnCheckNew.isEnabled = enabled
     }
 
     private fun refreshUI() {

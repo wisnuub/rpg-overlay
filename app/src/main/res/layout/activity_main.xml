@@ -70,14 +70,30 @@
         android:textSize="12sp"
         android:layout_marginTop="16dp"/>
 
-    <!-- Download monster sprites from the Orna codex -->
-    <Button
-        android:id="@+id/btnDownloadSprites"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Download Monster Sprites (optional)"
-        android:backgroundTint="#2D2D44"
-        android:layout_marginTop="24dp"/>
+        android:orientation="horizontal"
+        android:layout_marginTop="24dp">
+
+        <Button
+            android:id="@+id/btnDownloadSprites"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Download All Sprites"
+            android:backgroundTint="#2D2D44"
+            android:layout_marginEnd="6dp"/>
+
+        <Button
+            android:id="@+id/btnCheckNew"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Check for New"
+            android:backgroundTint="#2D2D44"/>
+
+    </LinearLayout>
 
     <TextView
         android:id="@+id/tvDownloadProgress"

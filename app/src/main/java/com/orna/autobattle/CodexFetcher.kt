@@ -5,20 +5,19 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
 import kotlinx.coroutines.*
-import org.json.JSONObject
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Downloads monster sprites from the Orna codex website and stores them in
- * the same directory as TemplateManager so they are picked up as templates.
+ * Downloads monster sprites from the Orna codex and stores them alongside
+ * TemplateManager templates.
  *
- * Sprite URL pattern: https://playorna.com/static/img/monsters/<slug_underscored>1.png
- *
- * Call [fetchAll] once (e.g., from a "Download sprites" button in MainActivity).
- * Progress is reported via [onProgress]. On completion, call TemplateManager.init()
- * so the new sprites are loaded into memory.
+ * [fetchAll]      — download everything missing (parallel, fast).
+ * [checkForNew]   — fetch the slug list only, return slugs not yet on disk.
+ * [downloadNew]   — download only the slugs returned by checkForNew.
  */
 object CodexFetcher {
 
@@ -26,79 +25,116 @@ object CodexFetcher {
     private const val BASE = "https://playorna.com"
     private const val LIST_URL = "$BASE/codex/monsters/"
     private const val SPRITES_URL = "$BASE/static/img/monsters/"
-
-    // In-game monsters appear roughly 40–80 px tall on a 1080-wide screen.
-    // Codex sprites are typically 64×64 game pixels, displayed larger on the
-    // codex page. We resize downloaded sprites to this target height so that
-    // template matching operates at the right scale.
     private const val TARGET_PX = 56
+    private const val CONCURRENT = 5      // parallel download slots
+    private const val PAGE_DELAY_MS = 200L
 
     data class Progress(val done: Int, val total: Int, val current: String)
 
-    /**
-     * Download all monster sprites from the codex.
-     * Runs on [Dispatchers.IO]. Call from a coroutine scope.
-     *
-     * @param onProgress called on main thread with progress updates
-     * @param onDone     called on main thread when finished
-     */
+    // ── Full download (all missing sprites) ───────────────────────────────────
+
     suspend fun fetchAll(
         ctx: Context,
         onProgress: (Progress) -> Unit,
         onDone: (downloaded: Int, total: Int) -> Unit
     ) = withContext(Dispatchers.IO) {
-        val outDir = File(ctx.filesDir, "monster_templates").also { it.mkdirs() }
-
-        // Step 1: collect all monster slugs by paginating the codex
-        val monsters = mutableListOf<Pair<String, String>>() // (slug, name)
+        val outDir = outDir(ctx)
         withContext(Dispatchers.Main) { onProgress(Progress(0, 0, "Fetching monster list…")) }
-        var page = 1
-        while (true) {
-            val url = if (page == 1) LIST_URL else "$LIST_URL?p=$page"
-            val html = fetchText(url) ?: break
-            val found = parseMonsterSlugs(html)
-            monsters.addAll(found)
-            Log.d(TAG, "Page $page: ${found.size} monsters")
-            if (!html.contains("Next page", ignoreCase = true)) break
-            page++
-            delay(400)
-        }
 
-        // Deduplicate
+        val monsters = fetchAllSlugs()
         val unique = monsters.distinctBy { it.first }
         Log.d(TAG, "Total unique monsters: ${unique.size}")
 
-        // Step 2: download each sprite
-        var downloaded = 0
-        unique.forEachIndexed { idx, (slug, name) ->
-            val dest = File(outDir, "$slug.png")
-            if (!dest.exists()) {
-                val bmp = downloadSprite(slug)
-                if (bmp != null) {
-                    val scaled = scaleBitmap(bmp, TARGET_PX)
-                    bmp.recycle()
-                    dest.outputStream().use { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                    scaled.recycle()
-                    downloaded++
-                    Log.d(TAG, "Saved: $slug")
-                }
-            } else {
-                downloaded++ // already have it
-            }
-            withContext(Dispatchers.Main) {
-                onProgress(Progress(idx + 1, unique.size, name))
-            }
-            delay(350) // polite rate limit
-        }
-
-        withContext(Dispatchers.Main) { onDone(downloaded, unique.size) }
+        downloadList(unique, outDir, onProgress, onDone)
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Check for new monsters not yet on disk ────────────────────────────────
+
+    suspend fun checkForNew(ctx: Context): List<Pair<String, String>> =
+        withContext(Dispatchers.IO) {
+            val existing = outDir(ctx).listFiles()
+                ?.map { it.nameWithoutExtension }
+                ?.toSet() ?: emptySet()
+            fetchAllSlugs()
+                .distinctBy { it.first }
+                .filter { (slug, _) -> !existing.contains(slug) }
+        }
+
+    suspend fun downloadNew(
+        ctx: Context,
+        newMonsters: List<Pair<String, String>>,
+        onProgress: (Progress) -> Unit,
+        onDone: (downloaded: Int, total: Int) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        if (newMonsters.isEmpty()) {
+            withContext(Dispatchers.Main) { onDone(0, 0) }
+            return@withContext
+        }
+        downloadList(newMonsters, outDir(ctx), onProgress, onDone)
+    }
+
+    // ── Shared download engine (parallel with semaphore) ─────────────────────
+
+    private suspend fun downloadList(
+        monsters: List<Pair<String, String>>,
+        outDir: File,
+        onProgress: (Progress) -> Unit,
+        onDone: (downloaded: Int, total: Int) -> Unit
+    ) = coroutineScope {
+        val semaphore = Semaphore(CONCURRENT)
+        var done = 0
+
+        val jobs = monsters.mapIndexed { idx, (slug, name) ->
+            async {
+                semaphore.withPermit {
+                    val dest = File(outDir, "$slug.png")
+                    val saved = if (dest.exists()) {
+                        true // already have it
+                    } else {
+                        val bmp = downloadSprite(slug)
+                        if (bmp != null) {
+                            val scaled = scaleBitmap(bmp, TARGET_PX)
+                            bmp.recycle()
+                            dest.outputStream().use { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                            scaled.recycle()
+                            true
+                        } else false
+                    }
+                    val current = synchronized(this@CodexFetcher) { ++done }
+                    withContext(Dispatchers.Main) {
+                        onProgress(Progress(current, monsters.size, name))
+                    }
+                    saved
+                }
+            }
+        }
+
+        val results = jobs.awaitAll()
+        val downloaded = results.count { it }
+        withContext(Dispatchers.Main) { onDone(downloaded, monsters.size) }
+    }
+
+    // ── Slug scraping ─────────────────────────────────────────────────────────
+
+    private suspend fun fetchAllSlugs(): List<Pair<String, String>> =
+        withContext(Dispatchers.IO) {
+            val monsters = mutableListOf<Pair<String, String>>()
+            var page = 1
+            while (true) {
+                val url = if (page == 1) LIST_URL else "$LIST_URL?p=$page"
+                val html = fetchText(url) ?: break
+                val found = parseMonsterSlugs(html)
+                monsters.addAll(found)
+                Log.d(TAG, "Page $page: ${found.size} monsters")
+                if (!html.contains("Next page", ignoreCase = true)) break
+                page++
+                delay(PAGE_DELAY_MS)
+            }
+            monsters
+        }
 
     private fun parseMonsterSlugs(html: String): List<Pair<String, String>> {
         val results = mutableListOf<Pair<String, String>>()
-        // Match href="/codex/monsters/<slug>/" and the link text
         val linkRe = Regex("""href="/codex/monsters/([^/"]+)/"""")
         val nameRe = Regex("""href="/codex/monsters/[^/"]+/"[^>]*>([^<]+)<""")
         val hrefMatches = linkRe.findAll(html).toList()
@@ -111,11 +147,12 @@ object CodexFetcher {
         return results
     }
 
+    // ── Sprite download ───────────────────────────────────────────────────────
+
     private fun downloadSprite(slug: String): Bitmap? {
-        val underscoredSlug = slug.replace("-", "_")
-        // Try variant "1" first, then no suffix
+        val underscored = slug.replace("-", "_")
         for (suffix in listOf("1", "")) {
-            val url = "$SPRITES_URL${underscoredSlug}${suffix}.png"
+            val url = "$SPRITES_URL${underscored}${suffix}.png"
             try {
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.connectTimeout = 8000
@@ -153,4 +190,7 @@ object CodexFetcher {
             null
         }
     }
+
+    private fun outDir(ctx: Context) =
+        File(ctx.filesDir, "monster_templates").also { it.mkdirs() }
 }
