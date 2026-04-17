@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -44,7 +45,6 @@ class OverlayControlService : Service() {
 
     private val engine = AutoBattleEngine()
 
-    // Coroutine scope — SupervisorJob so one failed capture doesn't kill the loop
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var captureJob: Job? = null
     private var running = false
@@ -61,10 +61,13 @@ class OverlayControlService : Service() {
     private var screenDensity = 0
 
     // UI refs
+    private lateinit var tvStatusDot: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvStats: TextView
     private lateinit var tvTemplateCount: TextView
     private lateinit var btnToggle: Button
+    private lateinit var btnSettings: Button
+    private lateinit var expandedPanel: View
     private lateinit var btnCapture: Button
     private lateinit var cbAutoBuy: CheckBox
     private lateinit var cbBoosterExp: CheckBox
@@ -79,7 +82,7 @@ class OverlayControlService : Service() {
     private var captureNextFrame = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification())
+        startForeground(NOTIF_ID, buildNotification("Overlay ready"))
 
         val metrics = resources.displayMetrics
         screenWidth = metrics.widthPixels
@@ -95,7 +98,14 @@ class OverlayControlService : Service() {
         }
 
         TemplateManager.init(this)
-        setupOverlay()
+
+        try {
+            setupOverlay()
+        } catch (e: Exception) {
+            Log.e(TAG, "setupOverlay failed: ${e.message}")
+            stopSelf()
+        }
+
         return START_NOT_STICKY
     }
 
@@ -126,10 +136,13 @@ class OverlayControlService : Service() {
             x = 16; y = 200
         }
 
+        tvStatusDot    = overlayView.findViewById(R.id.tvStatusDot)
         tvStatus       = overlayView.findViewById(R.id.tvOverlayStatus)
         tvStats        = overlayView.findViewById(R.id.tvStats)
         tvTemplateCount= overlayView.findViewById(R.id.tvTemplateCount)
         btnToggle      = overlayView.findViewById(R.id.btnToggle)
+        btnSettings    = overlayView.findViewById(R.id.btnSettings)
+        expandedPanel  = overlayView.findViewById(R.id.expandedPanel)
         btnCapture     = overlayView.findViewById(R.id.btnCapture)
         cbAutoBuy           = overlayView.findViewById(R.id.cbAutoBuy)
         cbBoosterExp        = overlayView.findViewById(R.id.cbBoosterExp)
@@ -161,13 +174,20 @@ class OverlayControlService : Service() {
         rebuildBoosterSettings()
 
         btnToggle.setOnClickListener { if (running) stopBattle() else startBattle() }
+
+        btnSettings.setOnClickListener {
+            expandedPanel.visibility =
+                if (expandedPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            windowManager.updateViewLayout(overlayView, overlayParams)
+        }
+
         btnCapture.setOnClickListener { captureNextFrame = true; tvStatus.text = "Capturing…" }
 
         refreshTemplateCount()
 
-        // Drag handle
+        // Drag via left area of bar
         var initX = 0; var initY = 0; var initTouchX = 0f; var initTouchY = 0f
-        overlayView.findViewById<TextView>(R.id.tvDragHandle).setOnTouchListener { _, ev ->
+        overlayView.findViewById<View>(R.id.dragArea).setOnTouchListener { _, ev ->
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initX = overlayParams.x; initY = overlayParams.y
@@ -203,11 +223,14 @@ class OverlayControlService : Service() {
     private fun startBattle() {
         if (!AutoBattleAccessibilityService.isRunning()) {
             tvStatus.text = "Enable Accessibility!"
+            tvStatusDot.setTextColor(Color.parseColor("#FF4444"))
             return
         }
         running = true
-        btnToggle.text = "Stop"
-        tvStatus.text = "Starting…"
+        btnToggle.text = "■"
+        tvStatus.text = "Running"
+        tvStatusDot.setTextColor(Color.parseColor("#44FF44"))
+        updateNotification("Auto-battle running")
         engine.requestBoosterApply()
 
         captureJob = serviceScope.launch {
@@ -226,11 +249,13 @@ class OverlayControlService : Service() {
         running = false
         captureJob?.cancel()
         captureJob = null
-        btnToggle.text = "Start"
+        btnToggle.text = "▶"
         tvStatus.text = "Stopped"
+        tvStatusDot.setTextColor(Color.parseColor("#888888"))
+        updateNotification("Overlay active — stopped")
     }
 
-    // ── Capture + analysis (heavy work off main thread) ───────────────────────
+    // ── Capture + analysis ────────────────────────────────────────────────────
 
     private suspend fun captureAndProcess() {
         val bmp = withContext(Dispatchers.IO) { latestBitmap() } ?: return
@@ -244,36 +269,33 @@ class OverlayControlService : Service() {
                 TemplateManager.captureFromFrame(this@OverlayControlService, bmp, cropX, cropY, size = 28)
             }
             bmp.recycle()
-            // Back on Main (coroutine started on Main)
             tvStatus.text = if (saved != null) "Saved: ${saved.name}" else "Capture failed"
             refreshTemplateCount()
             return
         }
 
-        // engine.tick() does all pixel analysis — run on CPU thread
         val action = withContext(Dispatchers.Default) {
             engine.tick(bmp, screenWidth, screenHeight)
         }
         bmp.recycle()
 
-        // UI updates — back on Main
         tvStatus.text = when (engine.state) {
-            AutoBattleEngine.State.HUNTING           -> "Hunting"
-            AutoBattleEngine.State.HEALING           -> "Healing"
-            AutoBattleEngine.State.BATTLE            -> "Battle"
-            AutoBattleEngine.State.BATTLE_USING_ITEM -> "Battle: healing"
-            AutoBattleEngine.State.BATTLE_FLEEING    -> "Fleeing"
-            AutoBattleEngine.State.PRE_BATTLE        -> "Pre-battle"
+            AutoBattleEngine.State.HUNTING            -> "Hunting"
+            AutoBattleEngine.State.HEALING            -> "Healing"
+            AutoBattleEngine.State.BATTLE             -> "Battle"
+            AutoBattleEngine.State.BATTLE_USING_ITEM  -> "Battle: healing"
+            AutoBattleEngine.State.BATTLE_FLEEING     -> "Fleeing"
+            AutoBattleEngine.State.PRE_BATTLE         -> "Pre-battle"
             AutoBattleEngine.State.PRE_BATTLE_BERSERK -> "Berserk!"
-            AutoBattleEngine.State.VICTORY           -> "Victory"
-            AutoBattleEngine.State.CHECKING_BUFFS    -> "Checking buffs"
-            AutoBattleEngine.State.APPLYING_BOOSTERS -> "Boosting"
-            AutoBattleEngine.State.FINDING_SHOP      -> "Finding shop"
-            AutoBattleEngine.State.IN_SHOP           -> "In shop"
-            AutoBattleEngine.State.IN_BUY_DIALOG     -> "Buying potions"
-            AutoBattleEngine.State.DISMISSING        -> "Dismissing"
+            AutoBattleEngine.State.VICTORY            -> "Victory"
+            AutoBattleEngine.State.CHECKING_BUFFS     -> "Checking buffs"
+            AutoBattleEngine.State.APPLYING_BOOSTERS  -> "Boosting"
+            AutoBattleEngine.State.FINDING_SHOP       -> "Finding shop"
+            AutoBattleEngine.State.IN_SHOP            -> "In shop"
+            AutoBattleEngine.State.IN_BUY_DIALOG      -> "Buying potions"
+            AutoBattleEngine.State.DISMISSING         -> "Dismissing"
         }
-        tvStats.text = "W:${engine.battlesWon} L:${engine.battlesLost}"
+        tvStats.text = "W:${engine.battlesWon}  L:${engine.battlesLost}"
 
         val svc = AutoBattleAccessibilityService.instance
         when (action) {
@@ -314,7 +336,9 @@ class OverlayControlService : Service() {
         super.onDestroy()
         stopBattle()
         serviceScope.cancel()
-        if (::overlayView.isInitialized) windowManager.removeView(overlayView)
+        if (::overlayView.isInitialized) {
+            try { windowManager.removeView(overlayView) } catch (_: Exception) {}
+        }
         virtualDisplay?.release()
         mediaProjection?.stop()
         imageReader?.close()
@@ -322,13 +346,25 @@ class OverlayControlService : Service() {
 
     override fun onBind(intent: Intent?) = null
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(text: String = "Overlay active"): Notification {
         val chan = NotificationChannel(CHANNEL_ID, "Auto Battle", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(chan)
+        // Tap notification to bring app back
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Orna Auto Battle")
-            .setContentText("Running in background")
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(pendingIntent)
             .build()
+    }
+
+    private fun updateNotification(text: String) {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIF_ID, buildNotification(text))
     }
 }

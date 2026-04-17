@@ -59,10 +59,15 @@ class MainActivity : AppCompatActivity() {
         btnLaunch.setOnClickListener {
             captureData?.let { data ->
                 OverlayControlService.start(this, captureResultCode, data)
-                // Launch Orna RPG so the overlay is immediately over the game
+                // Launch Orna RPG so the overlay is immediately over the game.
+                // FLAG_ACTIVITY_REORDER_TO_FRONT brings it forward if already running.
                 val ornaIntent = packageManager.getLaunchIntentForPackage("orna.rpg.mobile")
+                    ?: packageManager.getLaunchIntentForPackage("orna.rpg.mobile.googleplay")
                 if (ornaIntent != null) {
+                    ornaIntent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
                     startActivity(ornaIntent)
+                } else {
+                    android.widget.Toast.makeText(this, "Orna RPG not found — open it manually", android.widget.Toast.LENGTH_LONG).show()
                 }
                 finish()
             }
