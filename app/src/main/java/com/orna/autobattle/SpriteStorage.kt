@@ -49,6 +49,7 @@ object SpriteStorage {
     // ── Write ─────────────────────────────────────────────────────────────────
 
     fun save(ctx: Context, name: String, bitmap: Bitmap): Boolean {
+        ensureNomedia(ctx)
         val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             saveMediaStore(ctx, name, bitmap)
         } else {
@@ -58,9 +59,45 @@ object SpriteStorage {
         return ok
     }
 
+    private fun existsInMediaStore(ctx: Context, name: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        return (ctx.contentResolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Downloads._ID),
+            "${MediaStore.Downloads.RELATIVE_PATH} LIKE ? AND ${MediaStore.Downloads.DISPLAY_NAME} = ?",
+            arrayOf("$RELATIVE_PATH%", "$name.png"), null
+        )?.use { it.count } ?: 0) > 0
+    }
+
+    private fun ensureNomedia(ctx: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            @Suppress("DEPRECATION")
+            val dir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                FOLDER
+            ).also { it.mkdirs() }
+            File(dir, ".nomedia").createNewFile()
+            return
+        }
+        // For API 29+, insert a .nomedia file into MediaStore so gallery apps skip the folder
+        val existing = ctx.contentResolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Downloads._ID),
+            "${MediaStore.Downloads.RELATIVE_PATH} LIKE ? AND ${MediaStore.Downloads.DISPLAY_NAME} = ?",
+            arrayOf("$RELATIVE_PATH%", ".nomedia"), null
+        )?.use { it.count } ?: 0
+        if (existing > 0) return
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, ".nomedia")
+            put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+            put(MediaStore.Downloads.RELATIVE_PATH, RELATIVE_PATH)
+        }
+        ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+    }
+
     private fun saveMediaStore(ctx: Context, name: String, bitmap: Bitmap): Boolean {
-        // Delete any stale entry first so re-downloads don't create duplicates
-        deleteByName(ctx, name)
+        // Skip if already in MediaStore — avoids duplicate insertions
+        if (existsInMediaStore(ctx, name)) return true
 
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, "$name.png")
