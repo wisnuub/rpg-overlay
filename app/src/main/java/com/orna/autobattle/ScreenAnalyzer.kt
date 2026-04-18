@@ -409,7 +409,9 @@ object ScreenAnalyzer {
                 count++
             }
         if (count == 0) return false
-        return sum.toFloat() / count < 42f
+        // True overlay screens (player/building menus) are near-black (avg < 28).
+        // Dark cave/mountain terrain is dark grey (avg 30-45) — must not trigger this.
+        return sum.toFloat() / count < 28f
     }
 
     // ── Private: grid detection ───────────────────────────────────────────────
@@ -484,7 +486,18 @@ object ScreenAnalyzer {
             if ((Color.red(p) + Color.green(p) + Color.blue(p)) / 3 < BATTLE_DARK_MAX) dark++
             total++
         }
-        return total > 0 && dark.toFloat() / total > BATTLE_DARK_RATIO
+        if (total == 0 || dark.toFloat() / total <= BATTLE_DARK_RATIO) return false
+        // The battle panel is a dark bar at the bottom; the area above (battlefield / world map)
+        // should be meaningfully brighter. Reject if the whole screen is uniformly dark
+        // (dark cave/grey terrain on world map would fail this check).
+        val aboveY = (h * 0.62f).toInt().coerceIn(0, h - 1)
+        var aboveDark = 0; var aboveTotal = 0
+        for (x in (w * 0.1f).toInt() until (w * 0.9f).toInt() step 8) {
+            val p = bmp.getPixel(x, aboveY)
+            if ((Color.red(p) + Color.green(p) + Color.blue(p)) / 3 < BATTLE_DARK_MAX) aboveDark++
+            aboveTotal++
+        }
+        return aboveTotal == 0 || aboveDark.toFloat() / aboveTotal < 0.30f
     }
 
     private fun hasVictoryButton(bmp: Bitmap): Boolean {

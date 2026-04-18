@@ -137,14 +137,31 @@ class OverlayControlService : Service() {
     private fun setupMediaProjection(resultCode: Int, data: Intent) {
         val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = mgr.getMediaProjection(resultCode, data)
+        createVirtualDisplay()
+    }
+
+    private fun createVirtualDisplay() {
+        val mp = mediaProjection ?: return
+        virtualDisplay?.release()
+        imageReader?.close()
         imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
-        virtualDisplay = mediaProjection!!.createVirtualDisplay(
+        virtualDisplay = mp.createVirtualDisplay(
             "OrnaCapture",
             screenWidth, screenHeight, screenDensity,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader!!.surface, null, null
         )
-        Log.d(TAG, "MediaProjection ready ${screenWidth}x${screenHeight}")
+        Log.d(TAG, "VirtualDisplay ${screenWidth}x${screenHeight}")
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val metrics = resources.displayMetrics
+        val newW = metrics.widthPixels; val newH = metrics.heightPixels
+        if (newW == screenWidth && newH == screenHeight) return
+        screenWidth = newW; screenHeight = newH
+        Log.d(TAG, "Orientation changed → ${screenWidth}x${screenHeight}")
+        createVirtualDisplay()
     }
 
     private fun setupOverlay() {
@@ -347,13 +364,14 @@ class OverlayControlService : Service() {
         val image = reader.acquireLatestImage() ?: return null
         return try {
             val plane = image.planes[0]
-            val bmp = Bitmap.createBitmap(
-                plane.rowStride / plane.pixelStride, screenHeight, Bitmap.Config.ARGB_8888
-            )
-            bmp.copyPixelsFromBuffer(plane.buffer)
-            if (bmp.width != screenWidth)
-                Bitmap.createBitmap(bmp, 0, 0, screenWidth, screenHeight)
-            else bmp
+            val rowW = plane.rowStride / plane.pixelStride
+            val raw = Bitmap.createBitmap(rowW, image.height, Bitmap.Config.ARGB_8888)
+            raw.copyPixelsFromBuffer(plane.buffer)
+            // Crop to exact screen size; use minOf in case a stale frame arrives after rotation
+            val cropW = minOf(raw.width, screenWidth)
+            val cropH = minOf(raw.height, screenHeight)
+            if (cropW == raw.width && cropH == raw.height) raw
+            else Bitmap.createBitmap(raw, 0, 0, cropW, cropH).also { raw.recycle() }
         } finally {
             image.close()
         }
