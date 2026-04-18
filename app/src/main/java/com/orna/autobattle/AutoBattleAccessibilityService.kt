@@ -7,8 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Path
-import android.os.Handler
-import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.content.ContextCompat
 
@@ -28,15 +26,6 @@ class AutoBattleAccessibilityService : AccessibilityService() {
         fun isRunning() = instance != null
     }
 
-    private val uiHandler = Handler(Looper.getMainLooper())
-    private val pendingHide = Runnable { OverlayControlService.setOrnaForeground(false) }
-
-    private fun isSystemPackage(pkg: String) =
-        pkg.startsWith("android") ||
-        pkg.startsWith("com.android") ||
-        pkg.startsWith("com.google.android") ||
-        pkg.startsWith("com.samsung.android") ||
-        pkg == "com.orna.autobattle"
 
     private val tapReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -66,17 +55,12 @@ class AutoBattleAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString() ?: return
-            if (pkg == ORNA_PACKAGE) {
-                uiHandler.removeCallbacks(pendingHide)
-                OverlayControlService.setOrnaForeground(true)
-            } else if (!isSystemPackage(pkg)) {
-                // Wait 3 s before hiding — Orna's startup fires GMS and other
-                // non-Orna events before settling on the game window
-                uiHandler.removeCallbacks(pendingHide)
-                uiHandler.postDelayed(pendingHide, 3000)
-            }
+        // Show overlay when Orna comes to foreground; never auto-hide —
+        // manufacturer overlays (Game Space, game launchers, etc.) fire
+        // spurious window events that make debouncing unreliable.
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.packageName?.toString() == ORNA_PACKAGE) {
+            OverlayControlService.setOrnaForeground(true)
         }
     }
 
