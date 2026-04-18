@@ -3,6 +3,7 @@ package com.orna.autobattle
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -100,7 +101,14 @@ class OverlayControlService : Service() {
     private val tapHideHandler = Handler(Looper.getMainLooper())
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification("Overlay ready"))
+        // API 34+ requires the foreground service type in startForeground(); without it
+        // getMediaProjection() throws SecurityException (silently caught → proj stays null).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIF_ID, buildNotification("Overlay ready"),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(NOTIF_ID, buildNotification("Overlay ready"))
+        }
         instance = this
 
         val metrics = resources.displayMetrics
@@ -123,7 +131,15 @@ class OverlayControlService : Service() {
                 setupMediaProjection(resultCode, resultData)
             } catch (e: Exception) {
                 Log.e(TAG, "MediaProjection setup failed: ${e.message}")
+                // Surface the error in the debug overlay once it's ready
+                Handler(Looper.getMainLooper()).postDelayed({
+                    appendDebug("⚠ proj fail: ${e.javaClass.simpleName}")
+                }, 1500)
             }
+        } else {
+            Handler(Looper.getMainLooper()).postDelayed({
+                appendDebug("⚠ no capture permission passed")
+            }, 1500)
         }
 
         // Load templates off the main thread to avoid ANR
@@ -291,7 +307,8 @@ class OverlayControlService : Service() {
         tvStatusDot.setTextColor(Color.parseColor("#44FF44"))
         updateNotification("Auto-battle running")
         engine.requestBoosterApply()
-        appendDebug("── START ${screenWidth}x${screenHeight} tmpl:${TemplateManager.count()} ──")
+        val projOk = if (mediaProjection != null) "proj✓" else "proj✗"
+        appendDebug("── START ${screenWidth}x${screenHeight} tmpl:${TemplateManager.count()} $projOk ──")
 
         captureJob = serviceScope.launch {
             while (running) {
@@ -316,7 +333,16 @@ class OverlayControlService : Service() {
     // ── Capture + analysis ────────────────────────────────────────────────────
 
     private suspend fun captureAndProcess() {
-        val bmp = withContext(Dispatchers.IO) { latestBitmap() } ?: return
+        val bmp = withContext(Dispatchers.IO) { latestBitmap() }
+        if (bmp == null) {
+            val reason = when {
+                mediaProjection == null -> "no projection"
+                imageReader == null     -> "no reader"
+                else                   -> "null frame"
+            }
+            appendDebug("⚠ $reason")
+            return
+        }
 
         if (captureNextFrame) {
             captureNextFrame = false
