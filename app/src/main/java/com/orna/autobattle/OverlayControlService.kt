@@ -157,9 +157,21 @@ class OverlayControlService : Service() {
         return START_NOT_STICKY
     }
 
+    // Android 14+ requires registerCallback() before createVirtualDisplay().
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            Log.d(TAG, "MediaProjection stopped by system")
+            Handler(Looper.getMainLooper()).post {
+                virtualDisplay?.release(); virtualDisplay = null
+                appendDebug("⚠ proj stopped by system")
+            }
+        }
+    }
+
     private fun setupMediaProjection(resultCode: Int, data: Intent) {
         val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = mgr.getMediaProjection(resultCode, data)
+        mediaProjection!!.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
         createVirtualDisplay()
     }
 
@@ -172,7 +184,7 @@ class OverlayControlService : Service() {
             virtualDisplay = mp.createVirtualDisplay(
                 "OrnaCapture",
                 screenWidth, screenHeight, screenDensity,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                0,
                 imageReader!!.surface, null, null
             )
             Log.d(TAG, "VirtualDisplay created ${screenWidth}x${screenHeight}")
@@ -567,6 +579,7 @@ class OverlayControlService : Service() {
         debugView?.let { try { windowManager.removeView(it) } catch (_: Exception) {} }
         debugView = null
         virtualDisplay?.release()
+        mediaProjection?.unregisterCallback(projectionCallback)
         mediaProjection?.stop()
         imageReader?.close()
     }
