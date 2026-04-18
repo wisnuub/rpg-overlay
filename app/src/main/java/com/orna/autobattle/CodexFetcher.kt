@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Collections
 
 object CodexFetcher {
 
@@ -16,7 +17,6 @@ object CodexFetcher {
     private const val BASE = "https://playorna.com"
     private const val LIST_URL = "$BASE/codex/monsters/"
     private const val SPRITES_URL = "$BASE/static/img/monsters/"
-    private const val TARGET_PX = 56
     private const val CONCURRENT = 5
     private const val PAGE_DELAY_MS = 200L
 
@@ -61,6 +61,8 @@ object CodexFetcher {
         val existing = SpriteStorage.slugSet(ctx)
         val semaphore = Semaphore(CONCURRENT)
         var done = 0
+        // Collect newly saved slugs in a thread-safe set; write to SharedPrefs once at end
+        val newlySaved = Collections.synchronizedSet(mutableSetOf<String>())
 
         val jobs = monsters.map { (slug, name) ->
             async {
@@ -70,10 +72,9 @@ object CodexFetcher {
                     } else {
                         val bmp = downloadSprite(slug)
                         if (bmp != null) {
-                            val scaled = scaleBitmap(bmp, TARGET_PX)
+                            val ok = SpriteStorage.saveRaw(ctx, slug, bmp)
                             bmp.recycle()
-                            val ok = SpriteStorage.save(ctx, slug, scaled)
-                            scaled.recycle()
+                            if (ok) newlySaved.add(slug)
                             ok
                         } else false
                     }
@@ -87,6 +88,8 @@ object CodexFetcher {
         }
 
         val results = jobs.awaitAll()
+        // Single atomic write — avoids concurrent read-modify-write race on SharedPrefs
+        if (newlySaved.isNotEmpty()) SpriteStorage.addBatchToCache(ctx, newlySaved)
         val downloaded = results.count { it }
         withContext(Dispatchers.Main) { onDone(downloaded, monsters.size) }
     }
@@ -140,13 +143,6 @@ object CodexFetcher {
             }
         }
         return null
-    }
-
-    private fun scaleBitmap(src: Bitmap, targetHeight: Int): Bitmap {
-        if (src.height <= 0) return src
-        val scale = targetHeight.toFloat() / src.height
-        val w = (src.width * scale).toInt().coerceAtLeast(1)
-        return Bitmap.createScaledBitmap(src, w, targetHeight, true)
     }
 
     private fun fetchText(urlStr: String): String? = try {

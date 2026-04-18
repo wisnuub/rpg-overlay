@@ -48,6 +48,7 @@ object SpriteStorage {
 
     // ── Write ─────────────────────────────────────────────────────────────────
 
+    /** Save and immediately update the slug cache. Use for single captures. */
     fun save(ctx: Context, name: String, bitmap: Bitmap): Boolean {
         ensureNomedia(ctx)
         val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -57,6 +58,24 @@ object SpriteStorage {
         }
         if (ok) addToCache(ctx, name)
         return ok
+    }
+
+    /** Save without touching the cache — caller must call addBatchToCache() afterwards. */
+    fun saveRaw(ctx: Context, name: String, bitmap: Bitmap): Boolean {
+        ensureNomedia(ctx)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            saveMediaStore(ctx, name, bitmap)
+        } else {
+            saveFile(ctx, name, bitmap)
+        }
+    }
+
+    /** Atomic batch write — avoids concurrent read-modify-write races on SharedPrefs. */
+    fun addBatchToCache(ctx: Context, slugs: Set<String>) {
+        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val updated = (prefs.getStringSet(PREFS_KEY, emptySet()) ?: emptySet()).toMutableSet()
+        updated.addAll(slugs)
+        prefs.edit().putStringSet(PREFS_KEY, updated).apply()
     }
 
     private fun existsInMediaStore(ctx: Context, name: String): Boolean {

@@ -338,10 +338,11 @@ object ScreenAnalyzer {
 
     fun findMonsters(bmp: Bitmap, maxTargets: Int = 5): List<MonsterTarget> {
         val templates = TemplateManager.all()
-        return if (templates.isNotEmpty())
-            findByTemplates(bmp, templates, maxTargets)
-        else
-            findByYellowHeuristic(bmp, maxTargets)
+        if (templates.isNotEmpty()) {
+            val hits = findByTemplates(bmp, templates, maxTargets)
+            if (hits.isNotEmpty()) return hits
+        }
+        return findByYellowHeuristic(bmp, maxTargets)
     }
 
     // ── Generic overlay dismiss ───────────────────────────────────────────────
@@ -539,15 +540,18 @@ object ScreenAnalyzer {
         val yEnd = (fh * SEARCH_Y_BOT).toInt()
         val framePixels = IntArray(fw * fh)
         frame.getPixels(framePixels, 0, fw, 0, 0, fw, fh)
+        // Coarser step for large template sets to stay within frame budget
+        val step = (templates.size / 8 + MATCH_STEP).coerceAtMost(28)
         val hits = mutableListOf<MonsterTarget>()
         for (tmpl in templates) {
-            val tw = tmpl.bitmap.width; val th = tmpl.bitmap.height
+            val bmp = tmpl.matchBitmap  // pre-scaled to ~56px at init time
+            val tw = bmp.width; val th = bmp.height
             val tmplPixels = IntArray(tw * th)
-            tmpl.bitmap.getPixels(tmplPixels, 0, tw, 0, 0, tw, th)
+            bmp.getPixels(tmplPixels, 0, tw, 0, 0, tw, th)
             var bestConf = 0f; var bestX = 0; var bestY = 0
             val ySearchEnd = minOf(yEnd, fh - th)
-            for (fy in yStart until ySearchEnd step MATCH_STEP)
-                for (fx in 0 until fw - tw step MATCH_STEP) {
+            for (fy in yStart until ySearchEnd step step)
+                for (fx in 0 until fw - tw step step) {
                     val conf = sadConfidence(framePixels, fw, fx, fy, tmplPixels, tw, th)
                     if (conf > bestConf) { bestConf = conf; bestX = fx + tw / 2; bestY = fy + th / 2 }
                 }
