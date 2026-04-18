@@ -11,18 +11,32 @@ android {
         applicationId = "com.orna.autobattle"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.6"
+        versionCode = 8
+        versionName = "1.7"
+    }
+
+    signingConfigs {
+        create("release") {
+            val keyPath = System.getenv("SIGNING_STORE_FILE")
+            if (keyPath != null) {
+                storeFile = file(keyPath)
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: ""
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Sign release with the auto-generated debug keystore so it can be sideloaded
-            // without needing a production keystore for personal use.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (System.getenv("SIGNING_STORE_FILE") != null)
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8

@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Path
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.content.ContextCompat
 
@@ -25,6 +27,10 @@ class AutoBattleAccessibilityService : AccessibilityService() {
 
         fun isRunning() = instance != null
     }
+
+    // Debounce hide so system dialogs launched by Orna don't flicker the overlay off
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val pendingHide = Runnable { OverlayControlService.setOrnaForeground(false) }
 
     private val tapReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -56,7 +62,15 @@ class AutoBattleAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString() ?: return
-            OverlayControlService.setOrnaForeground(pkg == ORNA_PACKAGE)
+            if (pkg == ORNA_PACKAGE) {
+                uiHandler.removeCallbacks(pendingHide)
+                OverlayControlService.setOrnaForeground(true)
+            } else if (!pkg.startsWith("android") && !pkg.startsWith("com.android")) {
+                // Debounce: wait 800 ms before hiding — Orna spawns system dialogs
+                // that briefly put a non-Orna package in the foreground
+                uiHandler.removeCallbacks(pendingHide)
+                uiHandler.postDelayed(pendingHide, 800)
+            }
         }
     }
 

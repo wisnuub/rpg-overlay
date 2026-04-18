@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Required on Android 11+ so getLaunchIntentForPackage can see Orna -->
+    <queries>
+        <package android:name="playorna.com.orna" />
+    </queries>
+
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Needed to write sprites to Downloads on API < 29 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
