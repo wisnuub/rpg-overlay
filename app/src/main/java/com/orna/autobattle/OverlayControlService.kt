@@ -89,6 +89,11 @@ class OverlayControlService : Service() {
 
     private var captureNextFrame = false
 
+    // ── Debug log overlay ─────────────────────────────────────────────────────
+    private var debugView: android.widget.TextView? = null
+    private val debugLines = ArrayDeque<String>()
+    private val debugTimeFmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification("Overlay ready"))
         instance = this
@@ -244,6 +249,7 @@ class OverlayControlService : Service() {
         }
 
         windowManager.addView(overlayView, overlayParams)
+        setupDebugOverlay()
     }
 
     fun applyOrnaVisibility(visible: Boolean) {
@@ -279,6 +285,7 @@ class OverlayControlService : Service() {
         tvStatusDot.setTextColor(Color.parseColor("#44FF44"))
         updateNotification("Auto-battle running")
         engine.requestBoosterApply()
+        appendDebug("── START ${screenWidth}x${screenHeight} tmpl:${TemplateManager.count()} ──")
 
         captureJob = serviceScope.launch {
             while (running) {
@@ -295,6 +302,7 @@ class OverlayControlService : Service() {
         captureJob?.cancel(); captureJob = null
         btnToggle.text = "▶"
         tvStatus.text = "Stopped"
+        appendDebug("── STOP ──")
         tvStatusDot.setTextColor(Color.parseColor("#888888"))
         updateNotification("Overlay active — stopped")
     }
@@ -322,6 +330,18 @@ class OverlayControlService : Service() {
             engine.tick(bmp, screenWidth, screenHeight)
         }
         bmp.recycle()
+
+        // Debug log: screen-state | engine-state | action
+        val scr = engine.lastScreenState.name.take(7).padEnd(7)
+        val eng = engine.state.name.take(5).padEnd(5)
+        val act = when (action) {
+            is AutoBattleEngine.Action.Tap       -> "Tap(${action.x.toInt()},${action.y.toInt()})"
+            is AutoBattleEngine.Action.LongPress -> "Long(${action.x.toInt()},${action.y.toInt()})"
+            is AutoBattleEngine.Action.Swipe     -> "Swipe"
+            is AutoBattleEngine.Action.Wait      -> "Wait${action.ms}"
+            is AutoBattleEngine.Action.Nothing   -> "·"
+        }
+        appendDebug("$scr $eng $act")
 
         tvStatus.text = when (engine.state) {
             AutoBattleEngine.State.HUNTING            -> "Hunting"
@@ -377,6 +397,45 @@ class OverlayControlService : Service() {
         }
     }
 
+    // ── Debug overlay ─────────────────────────────────────────────────────────
+
+    private fun setupDebugOverlay() {
+        val dp = resources.displayMetrics.density
+        val tv = android.widget.TextView(this).apply {
+            textSize = 9f
+            setTextColor(Color.parseColor("#CCE8FFD8"))
+            typeface = android.graphics.Typeface.MONOSPACE
+            val pad = (5 * dp).toInt()
+            setPadding(pad, (3 * dp).toInt(), pad, (3 * dp).toInt())
+            val bg = android.graphics.drawable.GradientDrawable()
+            bg.setColor(Color.parseColor("#D0020202"))
+            bg.cornerRadius = 6 * dp
+            background = bg
+        }
+        val params = WindowManager.LayoutParams(
+            (240 * dp).toInt(), WRAP_CONTENT,
+            TYPE_APPLICATION_OVERLAY,
+            FLAG_NOT_FOCUSABLE or FLAG_NOT_TOUCHABLE or FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            x = (8 * dp).toInt(); y = (8 * dp).toInt()
+        }
+        try {
+            windowManager.addView(tv, params)
+            debugView = tv
+        } catch (e: Exception) {
+            Log.e(TAG, "debugOverlay addView: ${e.message}")
+        }
+    }
+
+    private fun appendDebug(line: String) {
+        val ts = debugTimeFmt.format(java.util.Date())
+        debugLines.addLast("$ts $line")
+        while (debugLines.size > 7) debugLines.removeFirst()
+        debugView?.text = debugLines.joinToString("\n")
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         instance = null
@@ -385,6 +444,8 @@ class OverlayControlService : Service() {
         if (::overlayView.isInitialized) {
             try { windowManager.removeView(overlayView) } catch (_: Exception) {}
         }
+        debugView?.let { try { windowManager.removeView(it) } catch (_: Exception) {} }
+        debugView = null
         virtualDisplay?.release()
         mediaProjection?.stop()
         imageReader?.close()

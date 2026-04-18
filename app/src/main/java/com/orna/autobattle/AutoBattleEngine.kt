@@ -55,6 +55,8 @@ class AutoBattleEngine {
 
     var state: State = State.HUNTING
         private set
+    var lastScreenState: ScreenAnalyzer.GameState = ScreenAnalyzer.GameState.UNKNOWN
+        private set
     var battlesWon = 0
         private set
     var battlesLost = 0
@@ -116,6 +118,7 @@ class AutoBattleEngine {
 
         // Generic overlay dismiss (level-up, etc.) — check before state machine
         if (ScreenAnalyzer.needsDismiss(bmp)) {
+            lastScreenState = ScreenAnalyzer.GameState.UNKNOWN
             state = State.DISMISSING
             if (now - lastActionMs > 1200) {
                 lastActionMs = now
@@ -124,7 +127,8 @@ class AutoBattleEngine {
             return Action.Wait(300)
         }
 
-        return when (ScreenAnalyzer.detectState(bmp)) {
+        lastScreenState = ScreenAnalyzer.detectState(bmp)
+        return when (lastScreenState) {
 
             // ── Victory ──────────────────────────────────────────────────────
             ScreenAnalyzer.GameState.VICTORY -> {
