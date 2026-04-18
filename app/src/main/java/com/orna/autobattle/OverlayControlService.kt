@@ -111,10 +111,7 @@ class OverlayControlService : Service() {
         }
         instance = this
 
-        val metrics = resources.displayMetrics
-        screenWidth = metrics.widthPixels
-        screenHeight = metrics.heightPixels
-        screenDensity = metrics.densityDpi
+        updateScreenDimensions()
 
         // Fix: use typed getParcelableExtra on API 33+
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
@@ -168,26 +165,48 @@ class OverlayControlService : Service() {
 
     private fun createVirtualDisplay() {
         val mp = mediaProjection ?: return
-        virtualDisplay?.release()
+        virtualDisplay?.release(); virtualDisplay = null
         imageReader?.close()
         imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
-        virtualDisplay = mp.createVirtualDisplay(
-            "OrnaCapture",
-            screenWidth, screenHeight, screenDensity,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface, null, null
-        )
-        Log.d(TAG, "VirtualDisplay ${screenWidth}x${screenHeight}")
+        try {
+            virtualDisplay = mp.createVirtualDisplay(
+                "OrnaCapture",
+                screenWidth, screenHeight, screenDensity,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader!!.surface, null, null
+            )
+            Log.d(TAG, "VirtualDisplay created ${screenWidth}x${screenHeight}")
+        } catch (e: Exception) {
+            Log.e(TAG, "createVirtualDisplay failed: ${e.message}")
+            appendDebug("⚠ vd fail: ${e.javaClass.simpleName}")
+        }
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        val metrics = resources.displayMetrics
-        val newW = metrics.widthPixels; val newH = metrics.heightPixels
-        if (newW == screenWidth && newH == screenHeight) return
-        screenWidth = newW; screenHeight = newH
+        val oldW = screenWidth; val oldH = screenHeight
+        updateScreenDimensions()
+        if (screenWidth == oldW && screenHeight == oldH) return
         Log.d(TAG, "Orientation changed → ${screenWidth}x${screenHeight}")
         createVirtualDisplay()
+    }
+
+    private fun updateScreenDimensions() {
+        // Use real display bounds so the ImageReader matches what MediaProjection captures.
+        // resources.displayMetrics.heightPixels excludes the nav bar on some devices,
+        // creating a surface size mismatch that causes acquireLatestImage() to always return null.
+        val wm = getSystemService(WindowManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = wm.currentWindowMetrics.bounds
+            screenWidth = bounds.width(); screenHeight = bounds.height()
+        } else {
+            val dm = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay.getRealMetrics(dm)
+            screenWidth = dm.widthPixels; screenHeight = dm.heightPixels
+        }
+        screenDensity = resources.displayMetrics.densityDpi
+        Log.d(TAG, "Screen dimensions: ${screenWidth}x${screenHeight} @ ${screenDensity}dpi")
     }
 
     private fun setupOverlay() {
@@ -338,6 +357,7 @@ class OverlayControlService : Service() {
             val reason = when {
                 mediaProjection == null -> "no projection"
                 imageReader == null     -> "no reader"
+                virtualDisplay == null  -> "no display"
                 else                   -> "null frame"
             }
             appendDebug("⚠ $reason")
