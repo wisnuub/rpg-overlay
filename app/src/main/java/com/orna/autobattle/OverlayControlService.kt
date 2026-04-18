@@ -94,6 +94,11 @@ class OverlayControlService : Service() {
     private val debugLines = ArrayDeque<String>()
     private val debugTimeFmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
 
+    // ── Tap cursor ────────────────────────────────────────────────────────────
+    private var tapRingView: View? = null
+    private var tapRingParams: WindowManager.LayoutParams? = null
+    private val tapHideHandler = Handler(Looper.getMainLooper())
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification("Overlay ready"))
         instance = this
@@ -249,6 +254,7 @@ class OverlayControlService : Service() {
         }
 
         windowManager.addView(overlayView, overlayParams)
+        setupTapRing()
         setupDebugOverlay()
     }
 
@@ -363,12 +369,18 @@ class OverlayControlService : Service() {
 
         val svc = AutoBattleAccessibilityService.instance
         when (action) {
-            is AutoBattleEngine.Action.Tap ->
+            is AutoBattleEngine.Action.Tap -> {
+                flashTapRing(action.x, action.y)
                 svc?.performTap(action.x, action.y)
-            is AutoBattleEngine.Action.LongPress ->
+            }
+            is AutoBattleEngine.Action.LongPress -> {
+                flashTapRing(action.x, action.y, longPress = true)
                 svc?.performTap(action.x, action.y, action.ms)
-            is AutoBattleEngine.Action.Swipe ->
+            }
+            is AutoBattleEngine.Action.Swipe -> {
+                flashTapRing(action.x1, action.y1)
                 svc?.performSwipe(action.x1, action.y1, action.x2, action.y2, action.durationMs)
+            }
             is AutoBattleEngine.Action.Wait -> Unit
             is AutoBattleEngine.Action.Nothing -> Unit
         }
@@ -395,6 +407,65 @@ class OverlayControlService : Service() {
         } finally {
             image.close()
         }
+    }
+
+    // ── Tap cursor ────────────────────────────────────────────────────────────
+
+    private fun setupTapRing() {
+        val dp = resources.displayMetrics.density
+        val sizePx = (44 * dp).toInt()
+        val strokePx = (3.5f * dp).toInt()
+
+        val ring = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(Color.TRANSPARENT)
+            setStroke(strokePx, Color.parseColor("#DDFF8800"))
+        }
+        val view = View(this).apply {
+            background = ring
+            visibility = View.GONE
+        }
+        val params = WindowManager.LayoutParams(
+            sizePx, sizePx,
+            TYPE_APPLICATION_OVERLAY,
+            FLAG_NOT_FOCUSABLE or FLAG_NOT_TOUCHABLE or FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+
+        try {
+            windowManager.addView(view, params)
+            tapRingView = view
+            tapRingParams = params
+        } catch (e: Exception) {
+            Log.e(TAG, "tapRing addView: ${e.message}")
+        }
+    }
+
+    private fun flashTapRing(x: Float, y: Float, longPress: Boolean = false) {
+        val view = tapRingView ?: return
+        val params = tapRingParams ?: return
+        val dp = resources.displayMetrics.density
+        val sizePx = (if (longPress) 60 else 44) * dp
+        val strokePx = (3.5f * dp).toInt()
+
+        val ring = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(Color.TRANSPARENT)
+            setStroke(strokePx, Color.parseColor(if (longPress) "#DDFFDD00" else "#DDFF8800"))
+        }
+        view.background = ring
+        params.width = sizePx.toInt()
+        params.height = sizePx.toInt()
+        params.x = (x - sizePx / 2).toInt().coerceAtLeast(0)
+        params.y = (y - sizePx / 2).toInt().coerceAtLeast(0)
+
+        try {
+            windowManager.updateViewLayout(view, params)
+            view.visibility = View.VISIBLE
+        } catch (e: Exception) { return }
+
+        tapHideHandler.removeCallbacksAndMessages(null)
+        tapHideHandler.postDelayed({ view.visibility = View.GONE }, if (longPress) 800 else 450)
     }
 
     // ── Debug overlay ─────────────────────────────────────────────────────────
@@ -444,6 +515,9 @@ class OverlayControlService : Service() {
         if (::overlayView.isInitialized) {
             try { windowManager.removeView(overlayView) } catch (_: Exception) {}
         }
+        tapHideHandler.removeCallbacksAndMessages(null)
+        tapRingView?.let { try { windowManager.removeView(it) } catch (_: Exception) {} }
+        tapRingView = null
         debugView?.let { try { windowManager.removeView(it) } catch (_: Exception) {} }
         debugView = null
         virtualDisplay?.release()
