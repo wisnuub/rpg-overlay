@@ -28,9 +28,15 @@ class AutoBattleAccessibilityService : AccessibilityService() {
         fun isRunning() = instance != null
     }
 
-    // Debounce hide so system dialogs launched by Orna don't flicker the overlay off
     private val uiHandler = Handler(Looper.getMainLooper())
     private val pendingHide = Runnable { OverlayControlService.setOrnaForeground(false) }
+
+    private fun isSystemPackage(pkg: String) =
+        pkg.startsWith("android") ||
+        pkg.startsWith("com.android") ||
+        pkg.startsWith("com.google.android") ||
+        pkg.startsWith("com.samsung.android") ||
+        pkg == "com.orna.autobattle"
 
     private val tapReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -65,11 +71,11 @@ class AutoBattleAccessibilityService : AccessibilityService() {
             if (pkg == ORNA_PACKAGE) {
                 uiHandler.removeCallbacks(pendingHide)
                 OverlayControlService.setOrnaForeground(true)
-            } else if (!pkg.startsWith("android") && !pkg.startsWith("com.android")) {
-                // Debounce: wait 800 ms before hiding — Orna spawns system dialogs
-                // that briefly put a non-Orna package in the foreground
+            } else if (!isSystemPackage(pkg)) {
+                // Wait 3 s before hiding — Orna's startup fires GMS and other
+                // non-Orna events before settling on the game window
                 uiHandler.removeCallbacks(pendingHide)
-                uiHandler.postDelayed(pendingHide, 800)
+                uiHandler.postDelayed(pendingHide, 3000)
             }
         }
     }
