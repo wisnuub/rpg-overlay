@@ -66,9 +66,11 @@ class OverlayControlService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    private var screenWidth = 0
+    private var screenWidth = 0   // full display (ImageReader / VirtualDisplay)
     private var screenHeight = 0
     private var screenDensity = 0
+    private var gameWidth = 0     // app-window area (game UI + tap coordinates)
+    private var gameHeight = 0
 
     private lateinit var tvStatusDot: TextView
     private lateinit var tvStatus: TextView
@@ -204,10 +206,8 @@ class OverlayControlService : Service() {
     }
 
     private fun updateScreenDimensions() {
-        // Use real display bounds so the ImageReader matches what MediaProjection captures.
-        // resources.displayMetrics.heightPixels excludes the nav bar on some devices,
-        // creating a surface size mismatch that causes acquireLatestImage() to always return null.
         val wm = getSystemService(WindowManager::class.java)
+        // Full display size: used for ImageReader/VirtualDisplay so frames actually arrive.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val bounds = wm.currentWindowMetrics.bounds
             screenWidth = bounds.width(); screenHeight = bounds.height()
@@ -218,7 +218,12 @@ class OverlayControlService : Service() {
             screenWidth = dm.widthPixels; screenHeight = dm.heightPixels
         }
         screenDensity = resources.displayMetrics.densityDpi
-        Log.d(TAG, "Screen dimensions: ${screenWidth}x${screenHeight} @ ${screenDensity}dpi")
+        // App-window size: the game draws its UI here (excludes gesture bar on many devices).
+        // All ratio-based tap calculations must use these so buttons aren't offset into the
+        // gesture zone (e.g. ITEM at 0.961 × 2400 = 2306px lands in gesture area, not button).
+        gameWidth  = resources.displayMetrics.widthPixels
+        gameHeight = resources.displayMetrics.heightPixels
+        Log.d(TAG, "Display ${screenWidth}x${screenHeight}, game window ${gameWidth}x${gameHeight}")
     }
 
     private fun setupOverlay() {
@@ -339,7 +344,7 @@ class OverlayControlService : Service() {
         updateNotification("Auto-battle running")
         engine.requestBoosterApply()
         val projOk = if (mediaProjection != null) "proj✓" else "proj✗"
-        appendDebug("── START ${screenWidth}x${screenHeight} tmpl:${TemplateManager.count()} $projOk ──")
+        appendDebug("── START cap:${screenWidth}x${screenHeight} game:${gameWidth}x${gameHeight} t:${TemplateManager.count()} $projOk ──")
 
         captureJob = serviceScope.launch {
             while (running) {
@@ -391,7 +396,7 @@ class OverlayControlService : Service() {
         }
 
         val action = withContext(Dispatchers.Default) {
-            engine.tick(bmp, screenWidth, screenHeight)
+            engine.tick(bmp, gameWidth, gameHeight)
         }
         bmp.recycle()
 
@@ -405,7 +410,13 @@ class OverlayControlService : Service() {
             is AutoBattleEngine.Action.Wait      -> "Wait${action.ms}"
             is AutoBattleEngine.Action.Nothing   -> "·"
         }
-        appendDebug("$scr $eng $act")
+        val extra = when (engine.state) {
+            AutoBattleEngine.State.BATTLE,
+            AutoBattleEngine.State.BATTLE_USING_ITEM,
+            AutoBattleEngine.State.BATTLE_FLEEING -> " HP:${engine.lastHpPct} MP:${engine.lastMpPct}"
+            else -> ""
+        }
+        appendDebug("$scr $eng$extra $act")
 
         tvStatus.text = when (engine.state) {
             AutoBattleEngine.State.HUNTING            -> "Hunting"

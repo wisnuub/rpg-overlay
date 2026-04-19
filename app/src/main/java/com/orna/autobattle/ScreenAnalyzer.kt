@@ -257,16 +257,27 @@ object ScreenAnalyzer {
 
     fun isFleeConfirmScreen(bmp: Bitmap): Boolean {
         val w = bmp.width; val h = bmp.height
-        val cx = (FLEE_YES_X * w).toInt()
-        val cy = (FLEE_YES_Y * h).toInt()
-        var redCount = 0; var total = 0
+        // YES button (red) at (68.9%, 57.8%)
+        val yesX = (FLEE_YES_X * w).toInt(); val yesY = (FLEE_YES_Y * h).toInt()
+        var yesRed = 0; var yesTotal = 0
         for (dy in -8..8 step 2) for (dx in -20..20 step 4) {
-            val p = bmp.getPixel((cx + dx).coerceIn(0, w - 1), (cy + dy).coerceIn(0, h - 1))
+            val p = bmp.getPixel((yesX + dx).coerceIn(0, w - 1), (yesY + dy).coerceIn(0, h - 1))
             val r = Color.red(p); val g = Color.green(p); val b = Color.blue(p)
-            if (r > 150 && r > g + 40 && r > b + 40) redCount++
-            total++
+            if (r > 150 && r > g + 40 && r > b + 40) yesRed++
+            yesTotal++
         }
-        return total > 0 && redCount.toFloat() / total > 0.40f
+        if (yesTotal == 0 || yesRed.toFloat() / yesTotal <= 0.40f) return false
+        // NO button (gray/blue) at (25.1%, 57.8%) must NOT also be red —
+        // rules out red battle effects, enemy health bars, etc. at the YES position.
+        val noX = (FLEE_NO_X * w).toInt()
+        var noRed = 0; var noTotal = 0
+        for (dy in -8..8 step 2) for (dx in -20..20 step 4) {
+            val p = bmp.getPixel((noX + dx).coerceIn(0, w - 1), (yesY + dy).coerceIn(0, h - 1))
+            val r = Color.red(p); val g = Color.green(p); val b = Color.blue(p)
+            if (r > 150 && r > g + 40 && r > b + 40) noRed++
+            noTotal++
+        }
+        return noTotal == 0 || noRed.toFloat() / noTotal < 0.25f
     }
 
     fun isItemScreen(bmp: Bitmap): Boolean {
